@@ -43,11 +43,18 @@ export default function Home() {
   }, [articles, searchTerm, selectedSource]);
 
   const triggerScrape = async () => {
-    alert("Triggering manual scrape... this may take 10-20 seconds in the background.");
+    alert("Triggering manual scrape... this may take 10 seconds in the background. Please wait for the success message.");
     try {
-      await fetch('/api/scrape');
-      // The onSnapshot will automatically update the UI when new docs are added!
+      const response = await fetch('/api/scrape');
+      const data = await response.json();
+      
+      if (data.success) {
+        alert(`Scrape completed! Added ${data.newItems} new articles.\nMessage: ${data.message || 'Success'}`);
+      } else {
+        alert(`Scrape failed with error: ${data.error}`);
+      }
     } catch (e) {
+      alert(`Network error during scrape: ${e.message}`);
       console.error(e);
     }
   };
