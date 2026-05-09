@@ -14,9 +14,28 @@ export async function GET(request) {
     const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
     const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
 
-    // Ensure we only process a few articles per run to avoid Vercel timeouts (Vercel free tier limit is 10s for serverless functions, or 60s for Hobby if configured, but let's just do 3 items at a time to be safe, or 5).
-    const MAX_ITEMS = 5;
+    const MAX_ITEMS = 2; // Process 2 per run to stay under Vercel's 10s limit
+    const DAILY_LIMIT = 10; // Maximum articles to process per day globally
     let itemsAdded = 0;
+
+    const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+    const articlesRef = collection(db, 'articles');
+
+    // 1. Check how many articles we've already scraped today
+    const today = new Date();
+    today.setUTCHours(0, 0, 0, 0);
+    const startOfDayISO = today.toISOString();
+    
+    const todayQuery = query(articlesRef, where("createdAt", ">=", startOfDayISO));
+    const todaySnapshot = await getDocs(todayQuery);
+    
+    if (todaySnapshot.size >= DAILY_LIMIT) {
+      return NextResponse.json({ 
+        success: true, 
+        message: `Daily limit of ${DAILY_LIMIT} articles reached. Sleeping to preserve Google API quota for your other apps.` 
+      });
+    }
 
     const queryTerm = encodeURIComponent('"AI" AND ("jobs" OR "employment" OR "hiring")');
     const feeds = [
@@ -27,7 +46,6 @@ export async function GET(request) {
     ];
 
     // Fetch existing articles to prevent duplicates
-    const articlesRef = collection(db, 'articles');
     const existingSnapshot = await getDocs(articlesRef);
     const existingLinks = new Set();
     const existingTitles = new Set();
@@ -47,7 +65,8 @@ export async function GET(request) {
         const parsedFeed = await parser.parseURL(feed.url);
         
         for (const item of parsedFeed.items) {
-          if (itemsAdded >= MAX_ITEMS) break;
+          // Double check both the per-run limit and the global daily limit!
+          if (itemsAdded >= MAX_ITEMS || (todaySnapshot.size + itemsAdded) >= DAILY_LIMIT) break;
 
           const title = item.title || "No Title";
           const link = item.link || "";
@@ -86,6 +105,9 @@ export async function GET(request) {
               existingTitles.add(cleanTitle);
               itemsAdded++;
               results.push(articleData);
+
+              // Small delay to prevent hitting Gemini's burst limits, while staying under Vercel's 10-second limit
+              await sleep(2000);
 
             } catch (err) {
               console.error(`Error processing article ${link}:`, err);
